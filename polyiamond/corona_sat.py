@@ -51,11 +51,12 @@ def find_valid_placements(
 
     Args:
         polyiamond: The polyiamond to place
-        occupied: Cells currently occupied by the base + previous coronas (not used here)
+        occupied: Cells currently occupied by the base + previous coronas
+                  (kept for API compatibility but not used for filtering here)
         boundary: Cells adjacent to occupied that need to be covered
 
     Returns:
-        List of valid Placement objects
+        List of Placement objects that touch the boundary
     """
     placements = []
 
