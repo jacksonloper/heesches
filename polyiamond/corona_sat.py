@@ -44,13 +44,14 @@ def find_valid_placements(
     boundary: Set[Cell]
 ) -> List[Placement]:
     """
-    Find all valid placements of the polyiamond that:
-    1. Touch at least one boundary cell
-    2. Don't overlap with occupied cells
+    Find all valid placements of the polyiamond that touch at least one boundary cell.
+    
+    Note: This does NOT filter out placements that overlap with occupied cells.
+    That constraint is enforced by the SAT formula instead, matching the paper's approach.
 
     Args:
         polyiamond: The polyiamond to place
-        occupied: Cells currently occupied by the base + previous coronas
+        occupied: Cells currently occupied by the base + previous coronas (not used here)
         boundary: Cells adjacent to occupied that need to be covered
 
     Returns:
@@ -77,10 +78,6 @@ def find_valid_placements(
                     Cell(c.x + dx, c.y + dy) for c in base_cells
                 )
 
-                # Check if this placement overlaps with occupied cells
-                if not placed_cells.isdisjoint(occupied):
-                    continue
-
                 # Create the placement
                 placement = Placement(placed_cells, trans_id, dx, dy)
 
@@ -94,6 +91,7 @@ def find_valid_placements(
 def build_sat_formula(
     placements: List[Placement],
     boundary: Set[Cell],
+    occupied: FrozenSet[Cell],
     require_complete: bool = True
 ) -> Tuple[CNF, Dict[int, Placement], Dict[Cell, List[int]]]:
     """
@@ -104,11 +102,13 @@ def build_sat_formula(
 
     Constraints:
         - No two placements can overlap (if placements share a cell, at most one is true)
+        - New placements cannot overlap with occupied cells (old tiles)
         - If require_complete: every boundary cell must be covered by at least one placement
 
     Args:
         placements: List of valid placements
         boundary: Set of boundary cells that need to be covered
+        occupied: Set of cells already occupied by base + previous coronas
         require_complete: If True, require all boundary cells to be covered
 
     Returns:
@@ -133,7 +133,15 @@ def build_sat_formula(
                 cell_to_vars[cell] = []
             cell_to_vars[cell].append(var)
 
-    # Constraint 1: No overlapping placements
+    # Constraint 1: New placements cannot overlap with occupied cells (old tiles)
+    # For each cell in occupied, if any placement covers it, that placement must be false
+    for cell in occupied:
+        if cell in cell_to_vars:
+            for var in cell_to_vars[cell]:
+                # This placement covers an occupied cell, so it must not be used
+                formula.append([-var])
+
+    # Constraint 2: No overlapping placements (within the new corona)
     # For each cell covered by multiple placements, at most one can be true
     for cell, vars_covering in cell_to_vars.items():
         if len(vars_covering) > 1:
@@ -142,7 +150,7 @@ def build_sat_formula(
                 for j in range(i + 1, len(vars_covering)):
                     formula.append([-vars_covering[i], -vars_covering[j]])
 
-    # Constraint 2: Every boundary cell must be covered
+    # Constraint 3: Every boundary cell must be covered
     if require_complete:
         for cell in boundary:
             if cell in cell_to_vars:
@@ -189,7 +197,7 @@ def solve_corona(
 
     # Build and solve SAT formula
     formula, var_to_placement, cell_to_vars = build_sat_formula(
-        placements, boundary, require_complete=True
+        placements, boundary, occupied, require_complete=True
     )
 
     # Solve
