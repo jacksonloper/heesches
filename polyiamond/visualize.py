@@ -29,6 +29,98 @@ COLORS = [
 ]
 
 
+def get_triangle_height() -> float:
+    """Return the height of an equilateral triangle with unit side."""
+    return math.sqrt(3) / 2
+
+
+def draw_grid(ax: plt.Axes, min_x: int, max_x: int, min_y: int, max_y: int,
+              padding: int = 2, color: str = '#CCCCCC', linewidth: float = 0.3) -> None:
+    """
+    Draw the underlying triangular grid in the background.
+
+    Args:
+        ax: Matplotlib axes to draw on
+        min_x, max_x, min_y, max_y: Bounding box of cells (in cell coordinates)
+        padding: Extra cells to draw beyond the bounds
+        color: Color for grid lines
+        linewidth: Width of grid lines
+    """
+    h = get_triangle_height()
+
+    # Extend bounds by padding
+    x_start = min_x - padding
+    x_end = max_x + padding
+    y_start = min_y - padding
+    y_end = max_y + padding
+
+    # Draw all triangles in the extended area
+    for y in range(y_start, y_end + 1):
+        for x in range(x_start, x_end + 1):
+            cell = Cell(x, y)
+            vertices = cell_to_vertices(cell)
+            # Close the triangle by repeating first vertex
+            xs = list(vertices[:, 0]) + [vertices[0, 0]]
+            ys = list(vertices[:, 1]) + [vertices[0, 1]]
+            ax.plot(xs, ys, color=color, linewidth=linewidth, zorder=0)
+
+
+def get_cell_edges(cell: Cell) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """
+    Get the three edges of a cell as pairs of vertices.
+
+    Returns:
+        List of 3 edges, each edge is ((x1, y1), (x2, y2))
+    """
+    vertices = cell_to_vertices(cell)
+    edges = []
+    for i in range(3):
+        p1 = (vertices[i, 0], vertices[i, 1])
+        p2 = (vertices[(i + 1) % 3, 0], vertices[(i + 1) % 3, 1])
+        # Normalize edge so (smaller, larger) for consistent comparison
+        if p1 > p2:
+            p1, p2 = p2, p1
+        edges.append((p1, p2))
+    return edges
+
+
+def compute_boundary_edges(cells: FrozenSet[Cell]) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """
+    Compute the boundary edges of a set of cells.
+
+    An edge is a boundary edge if it belongs to exactly one cell in the set.
+
+    Args:
+        cells: Set of cells forming a polyiamond
+
+    Returns:
+        List of boundary edges as ((x1, y1), (x2, y2)) tuples
+    """
+    edge_count = {}
+    for cell in cells:
+        for edge in get_cell_edges(cell):
+            edge_count[edge] = edge_count.get(edge, 0) + 1
+
+    # Boundary edges appear exactly once
+    return [edge for edge, count in edge_count.items() if count == 1]
+
+
+def draw_tile_boundary(ax: plt.Axes, cells: FrozenSet[Cell],
+                       color: str = 'black', linewidth: float = 2.0) -> None:
+    """
+    Draw the boundary edges of a tile (polyiamond).
+
+    Args:
+        ax: Matplotlib axes to draw on
+        cells: Set of cells forming the tile
+        color: Color for boundary lines
+        linewidth: Width of boundary lines
+    """
+    boundary_edges = compute_boundary_edges(cells)
+    for (x1, y1), (x2, y2) in boundary_edges:
+        ax.plot([x1, x2], [y1, y2], color=color, linewidth=linewidth, zorder=10)
+
+
 def cell_to_vertices(cell: Cell) -> np.ndarray:
     """
     Convert a cell to its triangle vertices in 2D coordinates.
@@ -75,7 +167,9 @@ def visualize_polyiamond(
     polyiamond: Polyiamond,
     ax: Optional[plt.Axes] = None,
     color: str = '#FF6B6B',
-    show: bool = True
+    show: bool = True,
+    show_grid: bool = True,
+    show_tile_boundaries: bool = True
 ) -> plt.Figure:
     """
     Visualize a single polyiamond.
@@ -85,6 +179,8 @@ def visualize_polyiamond(
         ax: Matplotlib axes to draw on (creates new figure if None)
         color: Fill color for the triangles
         show: If True, display the figure
+        show_grid: If True, draw the underlying triangular grid
+        show_tile_boundaries: If True, draw tile boundaries with thick lines
 
     Returns:
         The matplotlib Figure object
@@ -94,10 +190,24 @@ def visualize_polyiamond(
     else:
         fig = ax.figure
 
+    # Compute bounding box and draw grid
+    if polyiamond.cells:
+        min_x = min(c.x for c in polyiamond.cells)
+        max_x = max(c.x for c in polyiamond.cells)
+        min_y = min(c.y for c in polyiamond.cells)
+        max_y = max(c.y for c in polyiamond.cells)
+
+        if show_grid:
+            draw_grid(ax, min_x, max_x, min_y, max_y, padding=2)
+
     # Create patches for each cell
     for cell in polyiamond.cells:
         patch = create_triangle_patch(cell, color)
         ax.add_patch(patch)
+
+    # Draw tile boundary
+    if show_tile_boundaries and polyiamond.cells:
+        draw_tile_boundary(ax, polyiamond.cells, color='black', linewidth=2.0)
 
     # Set axis properties
     ax.set_aspect('equal')
@@ -120,7 +230,9 @@ def visualize_coronas(
     ax: Optional[plt.Axes] = None,
     show: bool = True,
     title: Optional[str] = None,
-    save_path: Optional[str] = None
+    save_path: Optional[str] = None,
+    show_grid: bool = True,
+    show_tile_boundaries: bool = True
 ) -> plt.Figure:
     """
     Visualize a polyiamond with its coronas.
@@ -132,6 +244,8 @@ def visualize_coronas(
         show: If True, display the figure
         title: Optional title for the figure
         save_path: If provided, save the figure to this path
+        show_grid: If True, draw the underlying triangular grid
+        show_tile_boundaries: If True, draw tile boundaries with thick lines
 
     Returns:
         The matplotlib Figure object
@@ -141,18 +255,45 @@ def visualize_coronas(
     else:
         fig = ax.figure
 
-    # Draw base polyiamond
+    # Collect all cells to compute bounding box
+    all_cells = set(polyiamond.cells)
+    for corona in coronas:
+        for placement in corona:
+            all_cells.update(placement.cells)
+
+    # Compute bounding box
+    if all_cells:
+        min_x = min(c.x for c in all_cells)
+        max_x = max(c.x for c in all_cells)
+        min_y = min(c.y for c in all_cells)
+        max_y = max(c.y for c in all_cells)
+
+        # Draw the underlying grid
+        if show_grid:
+            draw_grid(ax, min_x, max_x, min_y, max_y, padding=2)
+
+    # Draw base polyiamond fill
     for cell in polyiamond.cells:
         patch = create_triangle_patch(cell, COLORS[0])
         ax.add_patch(patch)
 
-    # Draw coronas
+    # Draw corona fills
     for i, corona in enumerate(coronas):
         color = COLORS[(i + 1) % len(COLORS)]
         for placement in corona:
             for cell in placement.cells:
                 patch = create_triangle_patch(cell, color, alpha=0.7)
                 ax.add_patch(patch)
+
+    # Draw tile boundaries
+    if show_tile_boundaries:
+        # Draw base polyiamond boundary
+        draw_tile_boundary(ax, polyiamond.cells, color='black', linewidth=2.0)
+
+        # Draw corona tile boundaries
+        for corona in coronas:
+            for placement in corona:
+                draw_tile_boundary(ax, placement.cells, color='black', linewidth=2.0)
 
     # Set axis properties
     ax.set_aspect('equal')
