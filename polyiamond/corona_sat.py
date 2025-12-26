@@ -72,6 +72,12 @@ def find_valid_placements(
                 dx = boundary_cell.x - base_cell.x
                 dy = boundary_cell.y - base_cell.y
 
+                # CRITICAL: Only allow translations that preserve triangle orientation
+                # If (dx + dy) is odd, triangles flip orientation and connectivity breaks
+                # This happens when boundary_cell and base_cell have different parities
+                if (dx + dy) % 2 != 0:
+                    continue
+
                 # Apply translation to get placed cells
                 placed_cells = frozenset(
                     Cell(c.x + dx, c.y + dy) for c in base_cells
